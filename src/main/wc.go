@@ -24,14 +24,11 @@ func Map(value string) *list.List {
 			!unicode.IsNumber(c)
 	}
 
-	for i := 0; i < len(lines); i++ {
-		words := strings.FieldsFunc(lines[i], f)
-		for j := 0; j < len(words); j++ {
-			var kv mapreduce.KeyValue
-			kv.Key = words[j]
-			kv.Value = "1"
-
-			kvList.PushFront(kv)
+	for _, line := range lines {
+		words := strings.FieldsFunc(line, f)
+		for _, word := range words {
+			kvList.PushFront(
+				mapreduce.KeyValue{word, "1"})
 		}
 	}
 	return kvList
