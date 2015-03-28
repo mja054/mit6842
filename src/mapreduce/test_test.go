@@ -148,7 +148,7 @@ func TestBasic(t *testing.T) {
 	fmt.Printf("  ... Basic Passed\n")
 }
 
-func TTestOneFailure(t *testing.T) {
+func TestOneFailure(t *testing.T) {
 	fmt.Printf("Test: One Failure mapreduce ...\n")
 	mr := setup()
 	// Start 2 workers that fail after 10 jobs
@@ -164,7 +164,7 @@ func TTestOneFailure(t *testing.T) {
 	fmt.Printf("  ... One Failure Passed\n")
 }
 
-func TTestManyFailures(t *testing.T) {
+func TestManyFailures(t *testing.T) {
 	fmt.Printf("Test: One ManyFailures mapreduce ...\n")
 	mr := setup()
 	i := 0

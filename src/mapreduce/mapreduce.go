@@ -62,7 +62,7 @@ type MapReduce struct {
 
 	// Map of registered workers that you need to keep up to date
 	Workers map[string]*WorkerInfo
-
+	failedJobQueue *list.List
 	// add any additional state here
 	jobsAssigned    map[string]*string
 	workerChan      chan int
@@ -81,6 +81,7 @@ func InitMapReduce(nmap int, nreduce int,
 	mr.registerChannel = make(chan string)
 	mr.DoneChannel = make(chan bool)
 	mr.Workers = make(map[string]*WorkerInfo)
+	mr.failedJobQueue = list.New()
 
 	mr.workerChan = make(chan int, 1)
 	mr.workerChan <- 1

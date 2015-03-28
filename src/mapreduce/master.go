@@ -70,15 +70,21 @@ func (mr *MapReduce) callWorkerDoJob(worker string,
 	if ok == false {
 		fmt.Printf("%s: DoJob %s error\n",
 			jobType, worker)
-	}
-	fmt.Printf("%s: Job %d completed by %s worker\n",
+		<-mr.workerChan
+		mr.failedJobQueue.PushBack(jobID)
+		mr.jobsInProgreess -= 1
+		delete(mr.Workers, worker)
+		mr.workerChan <- 1
+	} else {
+		fmt.Printf("%s: Job %d completed by %s worker\n",
 		jobType, jobID, worker)
-	//mr.Workers[worker].jobID = jobID
-	<-mr.workerChan
-	mr.Workers[worker].isIdle = true
-	mr.idleWorkerCnt += 1
-	mr.jobsInProgreess -= 1	
-	mr.workerChan <- 1
+		//mr.Workers[worker].jobID = jobID
+		<-mr.workerChan
+		mr.Workers[worker].isIdle = true
+		mr.idleWorkerCnt += 1
+		mr.jobsInProgreess -= 1	
+		mr.workerChan <- 1
+	}
 }
 
 func (mr *MapReduce) handleWorkerRegistration() {
@@ -125,6 +131,24 @@ func (mr *MapReduce) findIdleWorker() string {
 	return mWorker
 }
 
+func (mr *MapReduce) AllocateJob(jobList *list.List,
+	jobType JobType, NumOtherPhase int) {
+	for e := jobList.Front(); e != nil; e = e.Next() {
+		mWorker := mr.findIdleWorker()
+		go mr.callWorkerDoJob(mWorker, jobType,
+			e.Value.(int), NumOtherPhase);
+	}
+}
+
+func createJobList(jobNum int) *list.List {
+	l := list.New()
+	for i := 0; i < jobNum; i++ {
+		l.PushBack(i)
+	}
+
+	return l
+}
+
 func (mr *MapReduce) RunMaster() *list.List {
 	// Your code here
 	fmt.Println("RunMaster started")
@@ -133,28 +157,36 @@ func (mr *MapReduce) RunMaster() *list.List {
 
 	fmt.Println("starting Map process")
 
-	nMap := mr.nMap
-	for nMap > 0 {
-		mWorker := mr.findIdleWorker()
-		go mr.callWorkerDoJob(mWorker, Map, 
-			nMap - 1, mr.nReduce);
-
-		nMap -= 1
+	jobList := createJobList(mr.nMap)
+	for jobList.Len() != 0 {
+		mr.AllocateJob(jobList, Map,
+			mr.nReduce)
+		fmt.Println("Assignment complete, waiting for completion")
+		mr.waitForJobCompletion()
+		if (mr.failedJobQueue.Len() == 0) {
+			jobList = list.New()
+		} else {
+			jobList = mr.failedJobQueue
+			mr.failedJobQueue = list.New()
+		}
 	}
-	fmt.Println("Assignment complete, waiting for completion")
-	mr.waitForJobCompletion()
 
 	// Begining of Reduce
 	fmt.Println("RunMaster end")
 
-	nReduce := mr.nReduce
-	for nReduce > 0 {
-		mWorker := mr.findIdleWorker()
-		go mr.callWorkerDoJob(mWorker, Reduce, 
-			nReduce - 1, mr.nMap);
-		nReduce -= 1
+	jobList = createJobList(mr.nReduce)
+	for jobList.Len() != 0 {
+		mr.AllocateJob(jobList, Reduce,
+			mr.nMap)
+		fmt.Println("Assignment complete, waiting for completion")
+		mr.waitForJobCompletion()
+		if (mr.failedJobQueue.Len() == 0) {
+			jobList = list.New()
+		} else {
+			jobList = mr.failedJobQueue
+			mr.failedJobQueue = list.New()
+		}
 	}
-	fmt.Println("Assignment complete, waiting for completion")
-	mr.waitForJobCompletion()
+
 	return mr.KillWorkers()
 }
