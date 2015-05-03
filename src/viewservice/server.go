@@ -16,9 +16,10 @@ type ViewServer struct {
 	me       string
 
 	// Your declarations here.
-	view    View
-	KVSERVPingTimer map[string]int
-	Backup  string
+	primary string
+	backup  string
+	viewNum uint
+	kvserv  map[string]int
 	waiting bool
 }
 
@@ -27,57 +28,84 @@ type ViewServer struct {
 //
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 	// Your code here.
-	vs.mu.Lock()
-	{
-		if args.Viewnum == 0 {
-			if vs.view.Primary == args.Me {
-				log.Println("Primary (%s) restarted.",
-					args.Me)
-				vs.view.Primary = ""
-			} else if vs.view.Backup == args.Me {
-				log.Println("Backup (%s) restarted.",
-					args.Me)
-				vs.view.Backup = ""
-			}
-		}
-		if (vs.view.Primary == "") && (vs.view.Backup != args.Me) {
-			log.Printf("Setting Primar %s\n", args.Me);
-			vs.view.Primary = args.Me
-			log.Printf("Changing the Viewnum %d->%d\n",
-				vs.view.Viewnum, vs.view.Viewnum + 1)
-			vs.view.Viewnum += 1
-		} else if (vs.view.Backup == "") && (args.Me != vs.view.Primary) {
-			if vs.waiting == true {
-				vs.Backup = args.Me
-			} else {
-				log.Printf("Setting Backup %s\n", args.Me);
-				vs.view.Backup = args.Me
-				log.Printf("Changing the Viewnum %d->%d\n",
-					vs.view.Viewnum, vs.view.Viewnum + 1)
-				vs.view.Viewnum += 1
-			}
-		}
+	log.Printf("Ping from %s server with viewNum %d\n", args.Me, args.Viewnum)
 
-		if vs.view.Primary == args.Me {
-			if vs.waiting == true {
-				vs.waiting = false
-				if vs.Backup != "" {
-					log.Printf("Setting Backup %s\n", vs.Backup)
-					log.Printf("Changing the Viewnum %d->%d\n",
-						vs.view.Viewnum, vs.view.Viewnum + 1)
-					vs.view.Backup = vs.Backup
-					vs.Backup = ""
-					vs.view.Viewnum += 1
+	vs.mu.Lock()
+	if vs.waiting {
+		if (vs.primary == "") {
+			log.Fatalf("Primary can never be empty when we are in waiting state\n")
+		} else if (vs.primary == args.Me) {
+			if (args.Viewnum == 0) {
+				log.Printf("Primary restarted\n")
+				if (vs.backup != "") {
+					vs.primary = vs.backup
+					log.Printf("New Primary %s\n", vs.primary)
+					vs.viewNum += 1
+					log.Printf("viewNum = %d\n", vs.viewNum)
+					vs.backup = args.Me
+					log.Printf("New Backup %s\n", vs.backup)
+					log.Printf("Coming out of wait state\n")
+					vs.waiting = false
+				} else {
+					log.Printf("Retaining the primary %s and in waiting state\n", vs.primary)
+					// We should enter waiting state again
 				}
 			} else {
-				vs.waiting = true
+				vs.waiting = false
+				log.Printf("Coming out of wait state\n")
+				if (vs.backup == "") {
+					vs.backup = vs.get_server()
+					if (vs.backup != "") {
+						log.Printf("New backup server %s\n", vs.backup)
+						vs.viewNum += 1;
+						log.Printf("viewNum = %d\n", vs.viewNum)
+					}
+				}
 			}
 		}
-		vs.KVSERVPingTimer[args.Me] = 0
-		reply.View.Viewnum = vs.view.Viewnum
-		reply.View.Primary = vs.view.Primary
-		reply.View.Backup  = vs.view.Backup
+	} else {
+		if (vs.primary == "") {
+			vs.primary = args.Me
+			log.Printf("New primary %s\n", vs.primary)
+			vs.waiting = true
+			log.Printf("Entering wait state, primary %s\n", vs.primary)
+			vs.viewNum += 1;
+			log.Printf("viewnum = %d\n", vs.viewNum)
+		} else if (args.Me == vs.primary) {
+			if (args.Viewnum == 0) {
+				log.Printf("Primary %s restarted\n", vs.primary)
+				if (vs.backup == "") {
+					log.Printf("No backup, Entering wait state, primary %s\n", vs.primary)
+					vs.waiting = true
+				} else {
+					vs.primary = vs.backup
+					log.Printf("New primary %s\n", vs.primary)
+					vs.backup = args.Me
+					log.Printf("New backup %s\n", vs.backup)
+					vs.viewNum += 1
+					log.Printf("viewnum = %d\n", vs.viewNum)
+				}
+			} else {
+				if (args.Viewnum == vs.viewNum) {
+					log.Printf("Same view num, not entering wait state\n");
+				} else {
+					vs.waiting = true
+					log.Printf("Different view num, entering wait state, primary %s\n", vs.primary)
+				}
+			}
+		} else if (vs.backup == "") {
+			vs.backup = args.Me
+			log.Printf("New backup %s\n", vs.backup)
+			vs.viewNum += 1
+			log.Printf("viewNum = %d\n", vs.viewNum)
+		}
 	}
+	vs.kvserv[args.Me] = 0
+
+	reply.View.Viewnum = vs.viewNum
+	reply.View.Primary = vs.primary
+	reply.View.Backup  = vs.backup
+
 	vs.mu.Unlock();
 	return nil
 }
@@ -90,24 +118,26 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 	// Your code here.
 	vs.mu.Lock()
 	{
-		reply.View.Viewnum = vs.view.Viewnum
-		reply.View.Primary = vs.view.Primary
-		reply.View.Backup  = vs.view.Backup
+		reply.View.Viewnum = vs.viewNum
+		reply.View.Primary = vs.primary
+		reply.View.Backup  = vs.backup
 	}
 	vs.mu.Unlock()
 	return nil
 }
 
 
-func (vs *ViewServer) _find_KVServ() string {
-	for k, _ := range vs.KVSERVPingTimer {
-		if k == vs.view.Primary ||
-			k == vs.view.Backup ||
-			k == vs.Backup {
+func (vs *ViewServer) get_server() string {
+	for k, _ := range vs.kvserv {
+		if k == vs.primary ||
+			k == vs.backup {
 			continue
 		}
+		log.Printf("returning server %s\n", k)
 		return k
 	}
+	log.Printf("Could not find the server\n")
+
 	return ""
 }
 
@@ -117,70 +147,42 @@ func (vs *ViewServer) _find_KVServ() string {
 // accordingly.
 //
 func (vs *ViewServer) tick() {
-	kvserv := ""
 	vs.mu.Lock()
-	for key, _ := range vs.KVSERVPingTimer {
-		vs.KVSERVPingTimer[key] += 1
-		if vs.KVSERVPingTimer[key] == DeadPings {
-			delete(vs.KVSERVPingTimer, key)
-			if vs.view.Primary == key {
+	for key, _ := range vs.kvserv {
+		vs.kvserv[key] += 1
+		if vs.kvserv[key] == DeadPings {
+			delete(vs.kvserv, key)
+			if vs.primary == key {
 				log.Printf("Primary %s timed out\n",
-					vs.view.Primary);
-				vs.view.Primary = ""
-			} else if vs.view.Backup == key {
-				log.Printf("Backup %s timed out\n",
-					vs.view.Backup);
-				vs.view.Backup = ""
-			}
-		}
-	}
-	if vs.view.Primary == "" {
-		increment := false
-		if vs.view.Backup != "" {
-			log.Printf("Setting Backup to Primary %s\n",
-				vs.view.Backup);
-			increment = true
-			vs.view.Primary = vs.view.Backup
-			kvserv = vs._find_KVServ()
-			if (kvserv == "") {
-				log.Printf("No server found to assign backkup\n")
-				vs.view.Backup = ""
+					vs.primary);
+				if vs.waiting {
+					vs.kvserv[key] = 0
+					log.Printf("In waiting state, so cannot remove primary %s\n",
+						vs.primary)
+				} else {
+					vs.primary = ""
+					if (vs.backup != "") {
+						vs.primary = vs.backup
+						log.Printf("New primary %s\n",
+							vs.primary);
+						vs.viewNum += 1
+						vs.backup = vs.get_server()
+					} else {
+						vs.primary = vs.get_server()
+						if (vs.primary != "") {
+							vs.viewNum += 1
+						}
+					}
+				}
+			} else if (key == vs.backup) {
+				vs.backup = vs.get_server()
+				if (vs.backup != "") {
+					log.Printf("New backup %s\n",
+						vs.backup);
+					vs.viewNum += 1
+				}
 			} else {
-				log.Printf("Setting Backup to %s\n", kvserv)
-				vs.view.Backup = kvserv
-			}
-		} else {
-			kvserv = vs._find_KVServ()
-			if (kvserv != "") {
-				increment = true
-				log.Printf("Setting Primary %s\n", kvserv);
-				vs.view.Primary = kvserv
-				vs.view.Backup = vs._find_KVServ()
-			} else {
-				log.Printf("No server found to assign to Primary.\n")
-			}
-		}
-		if (increment) {
-			log.Printf("Changing the Viewnum %d->%d\n",
-				vs.view.Viewnum, vs.view.Viewnum + 1)
-			vs.view.Viewnum += 1
-		}
-	} else if vs.view.Backup == "" {
-		if vs.waiting == true {
-			kvserv = vs._find_KVServ()
-			if (kvserv != "") {
-				vs.Backup = kvserv
-				log.Println("Currently waiting for primary to reply, registering backup %s",
-					kvserv);
-			}
-		} else {
-			kvserv = vs._find_KVServ()
-			if (kvserv != "") {
-				log.Printf("Setting Backup %s\n", kvserv);
-				vs.view.Backup = kvserv
-				log.Printf("Changing the Viewnum %d->%d\n",
-					vs.view.Viewnum, vs.view.Viewnum + 1)
-				vs.view.Viewnum += 1
+				log.Printf("%s server timed out\n", key);
 			}
 		}
 	}
@@ -216,12 +218,11 @@ func StartServer(me string) *ViewServer {
 	// Your vs.* initializations here.
 //	vs.mu = &sync.Mutex{}
 
-	vs.view.Viewnum = 0
-	vs.view.Primary = ""
-	vs.view.Backup = ""
+	vs.viewNum = 0
+	vs.primary = ""
+	vs.backup = ""
 	
-	vs.KVSERVPingTimer = make(map[string]int)
-	vs.Backup = ""
+	vs.kvserv = make(map[string]int)
 	vs.waiting = false
 
 	// tell net/rpc about our RPC server and handlers.
