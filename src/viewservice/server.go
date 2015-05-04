@@ -47,7 +47,9 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 					log.Printf("Coming out of wait state\n")
 					vs.waiting = false
 				} else {
-					log.Printf("Retaining the primary %s and in waiting state\n", vs.primary)
+					vs.primary = ""
+					vs.waiting = false
+					log.Printf("uninitailized servers right now\n")
 					// We should enter waiting state again
 				}
 			} else {
@@ -64,7 +66,7 @@ func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 			}
 		}
 	} else {
-		if (vs.primary == "") {
+		if (vs.primary == "" && vs.viewNum == 0) {
 			vs.primary = args.Me
 			log.Printf("New primary %s\n", vs.primary)
 			vs.waiting = true
@@ -168,10 +170,10 @@ func (vs *ViewServer) tick() {
 						vs.viewNum += 1
 						vs.backup = vs.get_server()
 					} else {
-						vs.primary = vs.get_server()
-						if (vs.primary != "") {
-							vs.viewNum += 1
-						}
+						vs.primary = "" //vs.get_server()
+						//if (vs.primary != "") {
+						vs.viewNum += 1
+						//}
 					}
 				}
 			} else if (key == vs.backup) {
